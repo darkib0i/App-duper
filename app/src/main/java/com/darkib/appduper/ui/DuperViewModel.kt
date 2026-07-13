@@ -120,16 +120,20 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
             DupeMethod.OWN_SPACE -> cloneIntoSpace(packageName)
             DupeMethod.CAN_SETUP -> provisionRequests.update { it + 1 }
             DupeMethod.SYSTEM_CLONE -> {
-                val ok = Profiles.openSystemClone(context, packageName)
-                _state.update {
-                    it.copy(
-                        message = if (ok) {
-                            "Opened your device's app-cloning screen — turn on the copy there."
-                        } else {
-                            "Your device doesn't expose an app-cloning option."
-                        }
-                    )
+                val message = when (Profiles.openSystemClone(context, packageName)) {
+                    Profiles.CloneLaunch.OEM_CLONER ->
+                        "Opened your phone's app-cloning screen — switch on the second copy there."
+                    Profiles.CloneLaunch.APP_DETAILS ->
+                        "Opened this app's info page. Look for \"App cloning\", \"Dual apps\" " +
+                            "or \"Clone\" — that makes the second copy."
+                    Profiles.CloneLaunch.SETTINGS ->
+                        "Your phone already has a work profile, so App Duper can't clone " +
+                            "directly. In Settings, search \"dual apps\", \"app clone\" or " +
+                            "\"parallel apps\" to make a second copy."
+                    Profiles.CloneLaunch.NONE ->
+                        "Couldn't open a cloning screen on this device."
                 }
+                _state.update { it.copy(message = message) }
             }
         }
     }

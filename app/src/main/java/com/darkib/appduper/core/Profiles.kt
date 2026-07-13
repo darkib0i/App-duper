@@ -106,48 +106,56 @@ object Profiles {
     fun canCreateOwnSpace(context: Context): Boolean =
         isManagedProfileSupported(context) && isProvisioningAllowed(context)
 
+    /** What [openSystemClone] actually managed to open, so the UI can guide accordingly. */
+    enum class CloneLaunch { OEM_CLONER, APP_DETAILS, SETTINGS, NONE }
+
     /**
-     * Fallback path for devices that already have a work profile: hand off to
-     * the OS / OEM built-in app-cloning UI for [packageName]. Tries the known
-     * manufacturer "dual apps" screens first, then the app's detail settings
-     * (where most OEMs surface the clone toggle). Returns true if something was
-     * opened.
+     * Fallback for devices that already have a work profile (so App Duper can't
+     * own its own Dupe Space): hand off to the OS / OEM built-in cloning UI.
+     *
+     * Every candidate is *tried*, not just resolved — some OEM screens resolve
+     * but throw on launch because they aren't exported to third-party apps, so
+     * we must keep going instead of failing on the first one. It ends on the
+     * plain Settings screen, which always opens, so the user is never left with
+     * a dead button.
      */
-    fun openSystemClone(context: Context, packageName: String): Boolean {
-        val candidates = listOf(
-            // Xiaomi / MIUI dual apps
-            Intent("miui.intent.action.APP_DUAL_APPS")
-                .setPackage("com.android.settings"),
-            // Samsung Dual Messenger
+    fun openSystemClone(context: Context, packageName: String): CloneLaunch {
+        val oemCloners = listOf(
+            // Xiaomi / MIUI / HyperOS "Dual apps"
+            Intent("miui.intent.action.APP_DUAL_APPS").setPackage("com.android.settings"),
+            // Samsung "Dual Messenger"
+            Intent("com.samsung.android.settings.DUAL_APPS"),
             Intent().setClassName(
                 "com.samsung.android.mateagent",
                 "com.samsung.android.mateagent.MainActivity",
             ),
-            // Generic dual-apps settings action seen on several OEMs
+            // Oppo / Realme / OnePlus (ColorOS) "App Clone"
+            Intent("com.coloros.settings.action.APP_CLONE"),
+            Intent("oppo.settings.action.APP_CLONE"),
+            // Generic action seen on several OEMs
             Intent("android.settings.DUAL_APPS_SETTINGS"),
         )
-        for (intent in candidates) {
+        for (intent in oemCloners) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (intent.resolveActivity(context.packageManager) != null) {
-                return try {
-                    context.startActivity(intent); true
-                } catch (e: Exception) {
-                    false
-                }
+            if (intent.resolveActivity(context.packageManager) != null && tryStart(context, intent)) {
+                return CloneLaunch.OEM_CLONER
             }
         }
-        // Last resort: open this app's detail page, where OEMs place the clone
-        // switch. Never throws for an installed package.
-        return try {
-            context.startActivity(
-                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                    .setData(Uri.fromParts("package", packageName, null))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            true
-        } catch (e: Exception) {
-            false
-        }
+        // App-specific info page: where several OEMs place the clone toggle.
+        val details = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(Uri.fromParts("package", packageName, null))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (tryStart(context, details)) return CloneLaunch.APP_DETAILS
+        // Guaranteed: the top-level Settings screen always opens.
+        val settings = Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (tryStart(context, settings)) return CloneLaunch.SETTINGS
+        return CloneLaunch.NONE
+    }
+
+    private fun tryStart(context: Context, intent: Intent): Boolean = try {
+        context.startActivity(intent); true
+    } catch (e: Exception) {
+        false
     }
 
     /** Launches the duplicated copy of [packageName] living in the Dupe Space. */
