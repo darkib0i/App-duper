@@ -49,7 +49,9 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
     /** Re-evaluate everything; called on every onResume. */
     fun refresh() {
         viewModelScope.launch {
-            val (stage, method) = withContext(Dispatchers.IO) { detect() }
+            val (stage, method) = withContext(Dispatchers.IO) {
+                runCatching { detect() }.getOrDefault(Stage.HOME to DupeMethod.SYSTEM_CLONE)
+            }
             _state.update { it.copy(stage = stage, method = method) }
             if (stage == Stage.HOME) loadApps()
         }
@@ -64,15 +66,21 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadApps() {
         viewModelScope.launch {
-            val (apps, duped) = withContext(Dispatchers.IO) {
-                val loaded = if (_state.value.apps.isEmpty()) {
-                    AppRepository.loadLaunchableApps(context)
-                } else {
-                    _state.value.apps
+            try {
+                val (apps, duped) = withContext(Dispatchers.IO) {
+                    val loaded = if (_state.value.apps.isEmpty()) {
+                        AppRepository.loadLaunchableApps(context)
+                    } else {
+                        _state.value.apps
+                    }
+                    loaded to runCatching { Profiles.dupedPackages(context) }.getOrDefault(emptySet())
                 }
-                loaded to Profiles.dupedPackages(context)
+                _state.update { it.copy(loadingApps = false, apps = apps, duped = duped) }
+            } catch (t: Throwable) {
+                _state.update {
+                    it.copy(loadingApps = false, message = "Couldn't load your apps: ${t.message}")
+                }
             }
-            _state.update { it.copy(loadingApps = false, apps = apps, duped = duped) }
         }
     }
 
