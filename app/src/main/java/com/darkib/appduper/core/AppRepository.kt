@@ -3,18 +3,18 @@ package com.darkib.appduper.core
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 
+/** App metadata only — no bitmap. Icons are loaded lazily, per visible card. */
 data class AppEntry(
     val packageName: String,
     val label: String,
-    val icon: ImageBitmap,
     val isSystem: Boolean,
 )
 
@@ -23,12 +23,10 @@ object AppRepository {
     private const val ICON_SIZE = 132
 
     /**
-     * Every launchable app on the device, except App Duper itself.
-     *
-     * Loading is defensive on purpose: a single app whose icon or label can't
-     * be resolved (a broken package, a stale instant app, a locked profile
-     * entry) must never crash the whole list — we fall back to a plain icon
-     * or, worst case, skip just that entry.
+     * Every launchable app on the device, except App Duper itself. This is
+     * intentionally cheap: it resolves names only. Icons are decoded later,
+     * off the main thread, one visible card at a time (see [loadIcon]) — that
+     * keeps memory bounded and stops a single bad icon from crashing the UI.
      */
     fun loadLaunchableApps(context: Context): List<AppEntry> {
         val pm = context.packageManager
@@ -41,36 +39,49 @@ object AppRepository {
 
         return resolved
             .asSequence()
-            .distinctBy { it.activityInfo.packageName }
-            .filter { it.activityInfo.packageName != context.packageName }
+            .distinctBy { it.activityInfo?.packageName }
+            .filter { it.activityInfo?.packageName != null && it.activityInfo.packageName != context.packageName }
             .mapNotNull { info ->
                 val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
-                try {
-                    val appInfo: ApplicationInfo? = info.activityInfo.applicationInfo
-                    val label = runCatching { info.loadLabel(pm).toString() }
-                        .getOrNull()
-                        ?.takeIf { it.isNotBlank() }
-                        ?: pkg
-                    val icon = runCatching {
-                        info.loadIcon(pm).toBitmap(ICON_SIZE, ICON_SIZE).asImageBitmap()
-                    }.getOrElse { fallbackIcon() }
-                    val isSystem = appInfo != null &&
-                        appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0
-                    AppEntry(pkg, label, icon, isSystem)
-                } catch (t: Throwable) {
-                    null
-                }
+                val label = runCatching { info.loadLabel(pm).toString() }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: pkg
+                val isSystem = runCatching {
+                    val flags = info.activityInfo.applicationInfo?.flags ?: 0
+                    flags and ApplicationInfo.FLAG_SYSTEM != 0
+                }.getOrDefault(false)
+                AppEntry(pkg, label, isSystem)
             }
             .sortedBy { it.label.lowercase() }
             .toList()
     }
 
-    /** Shared neutral placeholder used when an app's real icon can't be loaded. */
+    // Small in-memory cache so scrolling doesn't re-decode icons.
+    private val iconCache = LruCache<String, ImageBitmap>(256)
+
+    /**
+     * Safely decode a single app's icon. Forces an ARGB_8888 software bitmap
+     * (never a hardware bitmap, which can crash when drawn in Compose) and
+     * falls back to a neutral tile if anything goes wrong. Call off the main
+     * thread.
+     */
+    fun loadIcon(context: Context, packageName: String): ImageBitmap {
+        iconCache.get(packageName)?.let { return it }
+        val bitmap = runCatching {
+            context.packageManager
+                .getApplicationIcon(packageName)
+                .toBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
+                .asImageBitmap()
+        }.getOrElse { fallback }
+        iconCache.put(packageName, bitmap)
+        return bitmap
+    }
+
+    /** Neutral placeholder used when a real icon can't be decoded. */
     private val fallback: ImageBitmap by lazy {
         val bmp = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
         Canvas(bmp).drawColor(Color.argb(255, 42, 42, 48))
         bmp.asImageBitmap()
     }
-
-    private fun fallbackIcon(): ImageBitmap = fallback
 }

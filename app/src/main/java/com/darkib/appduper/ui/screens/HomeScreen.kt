@@ -2,6 +2,7 @@ package com.darkib.appduper.ui.screens
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -63,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -73,14 +75,17 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.darkib.appduper.core.AppEntry
+import com.darkib.appduper.core.AppRepository
 import com.darkib.appduper.ui.DupeMethod
 import com.darkib.appduper.ui.DuperUiState
 import com.darkib.appduper.ui.components.AnimatedBackground
@@ -91,8 +96,12 @@ import com.darkib.appduper.ui.theme.CardSurface
 import com.darkib.appduper.ui.theme.Dimmed
 import com.darkib.appduper.ui.theme.MintGlow
 import com.darkib.appduper.ui.theme.Starlight
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 
 @Composable
 fun HomeScreen(
@@ -305,11 +314,81 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
 private fun LoadingApps() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            DupeMotif(size = 120.dp)
-            Spacer(Modifier.height(18.dp))
-            Text("Scanning your apps…", color = Dimmed, fontSize = 15.sp)
+            Box(Modifier.size(210.dp), contentAlignment = Alignment.Center) {
+                PulseRings()
+                OrbitDots()
+                DupeMotif(size = 108.dp)
+            }
+            Spacer(Modifier.height(20.dp))
+            LoadingText()
         }
     }
+}
+
+/** Concentric rings that expand outward and fade — a radar-like pulse. */
+@Composable
+private fun PulseRings() {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val p by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(2600, easing = LinearEasing)),
+        label = "pulseP",
+    )
+    Canvas(Modifier.size(210.dp)) {
+        val maxR = size.minDimension / 2f
+        repeat(3) { i ->
+            val phase = (p + i / 3f) % 1f
+            val radius = maxR * (0.35f + 0.65f * phase)
+            val alpha = (1f - phase) * 0.5f
+            drawCircle(
+                color = Color.White.copy(alpha = alpha),
+                radius = radius,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx()),
+            )
+        }
+    }
+}
+
+/** Small white dots orbiting the centre. */
+@Composable
+private fun OrbitDots() {
+    val transition = rememberInfiniteTransition(label = "orbit")
+    val angle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 6.28318f,
+        animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing)),
+        label = "orbitAngle",
+    )
+    Canvas(Modifier.size(210.dp)) {
+        val r = size.minDimension * 0.42f
+        repeat(3) { i ->
+            val a = angle + i * 2.0944f // 120° apart
+            val dotCenter = androidx.compose.ui.geometry.Offset(
+                center.x + cos(a) * r,
+                center.y + sin(a) * r,
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = 0.9f - i * 0.18f),
+                radius = (5f - i).coerceAtLeast(2.5f).dp.toPx(),
+                center = dotCenter,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoadingText() {
+    val dots by produceState(initialValue = "") {
+        var n = 0
+        while (true) {
+            value = ".".repeat(n % 4)
+            n++
+            delay(380)
+        }
+    }
+    Text("Scanning your apps$dots", color = Starlight, fontSize = 15.sp, fontWeight = FontWeight.Medium)
 }
 
 @Composable
@@ -384,13 +463,7 @@ private fun AppCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(contentAlignment = Alignment.Center) {
-                Image(
-                    bitmap = entry.icon,
-                    contentDescription = entry.label,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp)),
-                )
+                AppIcon(packageName = entry.packageName, label = entry.label)
                 if (isBusy) SpinningRing(size = 60.dp)
             }
             Spacer(Modifier.width(13.dp))
@@ -482,6 +555,63 @@ private fun Modifier.rotatingBorder(): Modifier {
         }
         .padding(1.5.dp)
         .clip(shape)
+}
+
+/** Loads one app icon lazily off the main thread and crossfades it in. */
+@Composable
+private fun AppIcon(packageName: String, label: String) {
+    val context = LocalContext.current
+    val icon by produceState<ImageBitmap?>(initialValue = null, packageName) {
+        value = withContext(Dispatchers.IO) { AppRepository.loadIcon(context, packageName) }
+    }
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(14.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Crossfade(targetState = icon, label = "iconFade") { bmp ->
+            if (bmp == null) {
+                ShimmerTile()
+            } else {
+                Image(
+                    bitmap = bmp,
+                    contentDescription = label,
+                    modifier = Modifier.size(48.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Animated grey placeholder shown while an icon decodes. */
+@Composable
+private fun ShimmerTile() {
+    val transition = rememberInfiniteTransition(label = "shimmerTile")
+    val x by transition.animateFloat(
+        initialValue = -160f,
+        targetValue = 160f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing)),
+        label = "shimmerX",
+    )
+    Box(
+        Modifier
+            .size(48.dp)
+            .background(Color.White.copy(alpha = 0.06f))
+            .drawBehind {
+                drawRect(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = 0.14f),
+                            Color.Transparent,
+                        ),
+                        start = androidx.compose.ui.geometry.Offset(x, 0f),
+                        end = androidx.compose.ui.geometry.Offset(x + 90f, size.height),
+                    )
+                )
+            },
+    )
 }
 
 @Composable
