@@ -4,16 +4,16 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- back card -->
+    <!-- back card (grey) -->
     <path
-        android:fillColor="#8000E5FF"
+        android:fillColor="#66C7C7CD"
         android:pathData="M38,32 h26 a6,6 0 0 1 6,6 v26 a6,6 0 0 1 -6,6 h-26 a6,6 0 0 1 -6,-6 v-26 a6,6 0 0 1 6,-6 z" />
-    <!-- front card -->
+    <!-- front card (white) -->
     <path
         android:fillColor="#FFFFFFFF"
         android:pathData="M44,40 h26 a6,6 0 0 1 6,6 v26 a6,6 0 0 1 -6,6 h-26 a6,6 0 0 1 -6,-6 v-26 a6,6 0 0 1 6,-6 z" />
-    <!-- plus sign on front card -->
+    <!-- plus sign on front card (black cut-out feel) -->
     <path
-        android:fillColor="#FF7C4DFF"
+        android:fillColor="#FF161619"
         android:pathData="M55,50 h4 v7 h7 v4 h-7 v7 h-4 v-7 h-7 v-4 h7 z" />
 </vector>

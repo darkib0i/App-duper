@@ -9,6 +9,8 @@ import android.content.pm.PackageManager
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
+import android.net.Uri
+import android.provider.Settings
 import com.darkib.appduper.admin.DuperAdmin
 
 /**
@@ -94,6 +96,58 @@ object Profiles {
         return la.getActivityList(null, profile)
             .map { it.applicationInfo.packageName }
             .toSet() - context.packageName
+    }
+
+    /**
+     * True when App Duper can provision its own Dupe Space. This is false when
+     * the device already has a managed profile (Android allows only one), which
+     * is exactly the case the old UI dead-ended on.
+     */
+    fun canCreateOwnSpace(context: Context): Boolean =
+        isManagedProfileSupported(context) && isProvisioningAllowed(context)
+
+    /**
+     * Fallback path for devices that already have a work profile: hand off to
+     * the OS / OEM built-in app-cloning UI for [packageName]. Tries the known
+     * manufacturer "dual apps" screens first, then the app's detail settings
+     * (where most OEMs surface the clone toggle). Returns true if something was
+     * opened.
+     */
+    fun openSystemClone(context: Context, packageName: String): Boolean {
+        val candidates = listOf(
+            // Xiaomi / MIUI dual apps
+            Intent("miui.intent.action.APP_DUAL_APPS")
+                .setPackage("com.android.settings"),
+            // Samsung Dual Messenger
+            Intent().setClassName(
+                "com.samsung.android.mateagent",
+                "com.samsung.android.mateagent.MainActivity",
+            ),
+            // Generic dual-apps settings action seen on several OEMs
+            Intent("android.settings.DUAL_APPS_SETTINGS"),
+        )
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (intent.resolveActivity(context.packageManager) != null) {
+                return try {
+                    context.startActivity(intent); true
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        }
+        // Last resort: open this app's detail page, where OEMs place the clone
+        // switch. Never throws for an installed package.
+        return try {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", packageName, null))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /** Launches the duplicated copy of [packageName] living in the Dupe Space. */

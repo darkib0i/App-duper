@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.AppDuper" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#0B0620</item>
+        <item name="android:windowBackground">#060607</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>

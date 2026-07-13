@@ -16,25 +16,27 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Which top-level screen should be visible. */
-enum class SpaceState {
-    CHECKING,      // still figuring things out
-    INSIDE_SPACE,  // this process runs inside the Dupe Space (companion screen)
-    UNSUPPORTED,   // device can't create managed profiles
-    NEEDS_SETUP,   // supported, but the Dupe Space doesn't exist yet
-    PROVISIONING,  // user kicked off setup, waiting for the profile to appear
-    READY,         // Dupe Space exists, main UI
+/** Top-level screen. Everything that isn't the companion is the single Home. */
+enum class Stage { CHECKING, INSIDE_SPACE, HOME }
+
+/** How this device can actually make a second copy of an app. */
+enum class DupeMethod {
+    OWN_SPACE,     // App Duper owns a Dupe Space and clones into it directly
+    CAN_SETUP,     // No space yet, but we're allowed to create one
+    SYSTEM_CLONE,  // A work profile already exists -> hand off to the OS cloner
 }
 
 data class DuperUiState(
-    val spaceState: SpaceState = SpaceState.CHECKING,
+    val stage: Stage = Stage.CHECKING,
+    val method: DupeMethod = DupeMethod.CAN_SETUP,
     val loadingApps: Boolean = true,
     val apps: List<AppEntry> = emptyList(),
     val duped: Set<String> = emptySet(),
     val inFlight: Set<String> = emptySet(),
     val query: String = "",
-    val celebration: Long = 0L,   // bump to fire the confetti overlay
-    val error: String? = null,
+    val provisioning: Boolean = false,
+    val celebration: Long = 0L,   // bump to fire the burst overlay
+    val message: String? = null,  // transient info / error banner
 )
 
 class DuperViewModel(app: Application) : AndroidViewModel(app) {
@@ -47,21 +49,17 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
     /** Re-evaluate everything; called on every onResume. */
     fun refresh() {
         viewModelScope.launch {
-            val spaceState = withContext(Dispatchers.IO) { detectSpaceState() }
-            _state.update { it.copy(spaceState = spaceState) }
-            if (spaceState == SpaceState.READY) {
-                loadApps()
-            }
+            val (stage, method) = withContext(Dispatchers.IO) { detect() }
+            _state.update { it.copy(stage = stage, method = method) }
+            if (stage == Stage.HOME) loadApps()
         }
     }
 
-    private fun detectSpaceState(): SpaceState = when {
-        Profiles.isInsideDupeSpace(context) -> SpaceState.INSIDE_SPACE
-        Profiles.dupeSpace(context) != null -> SpaceState.READY
-        !Profiles.isManagedProfileSupported(context) ||
-            !Profiles.isProvisioningAllowed(context) -> SpaceState.UNSUPPORTED
-        _state.value.spaceState == SpaceState.PROVISIONING -> SpaceState.PROVISIONING
-        else -> SpaceState.NEEDS_SETUP
+    private fun detect(): Pair<Stage, DupeMethod> = when {
+        Profiles.isInsideDupeSpace(context) -> Stage.INSIDE_SPACE to DupeMethod.OWN_SPACE
+        Profiles.dupeSpace(context) != null -> Stage.HOME to DupeMethod.OWN_SPACE
+        Profiles.canCreateOwnSpace(context) -> Stage.HOME to DupeMethod.CAN_SETUP
+        else -> Stage.HOME to DupeMethod.SYSTEM_CLONE
     }
 
     private fun loadApps() {
@@ -80,31 +78,55 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onQueryChange(query: String) = _state.update { it.copy(query = query) }
 
-    fun dismissError() = _state.update { it.copy(error = null) }
+    fun dismissMessage() = _state.update { it.copy(message = null) }
 
-    /** Called after the user finishes (or cancels) the system provisioning flow. */
+    // ---- Dupe Space provisioning -------------------------------------------
+
     fun onProvisioningLaunched() {
-        _state.update { it.copy(spaceState = SpaceState.PROVISIONING) }
+        _state.update { it.copy(provisioning = true) }
         viewModelScope.launch {
-            // The profile can take a little while to appear and finalize.
             repeat(120) {
                 val space = withContext(Dispatchers.IO) { Profiles.dupeSpace(context) }
                 if (space != null) {
-                    _state.update { it.copy(spaceState = SpaceState.READY) }
+                    _state.update {
+                        it.copy(provisioning = false, method = DupeMethod.OWN_SPACE)
+                    }
                     loadApps()
                     return@launch
                 }
                 delay(1000)
             }
-            _state.update { it.copy(spaceState = SpaceState.NEEDS_SETUP) }
+            _state.update { it.copy(provisioning = false) }
         }
     }
 
-    fun provisioningCancelled() {
-        _state.update { it.copy(spaceState = SpaceState.NEEDS_SETUP) }
-    }
+    fun provisioningCancelled() = _state.update { it.copy(provisioning = false) }
+
+    // ---- Duping ------------------------------------------------------------
+
+    /** Requests that MainActivity launch the system provisioning flow. */
+    val provisionRequests = MutableStateFlow(0)
 
     fun dupe(packageName: String) {
+        when (_state.value.method) {
+            DupeMethod.OWN_SPACE -> cloneIntoSpace(packageName)
+            DupeMethod.CAN_SETUP -> provisionRequests.update { it + 1 }
+            DupeMethod.SYSTEM_CLONE -> {
+                val ok = Profiles.openSystemClone(context, packageName)
+                _state.update {
+                    it.copy(
+                        message = if (ok) {
+                            "Opened your device's app-cloning screen — turn on the copy there."
+                        } else {
+                            "Your device doesn't expose an app-cloning option."
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private fun cloneIntoSpace(packageName: String) {
         if (packageName in _state.value.inFlight) return
         _state.update { it.copy(inFlight = it.inFlight + packageName) }
         viewModelScope.launch {
@@ -115,12 +137,11 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update {
                     it.copy(
                         inFlight = it.inFlight - packageName,
-                        error = "Couldn't reach the Dupe Space. Try re-opening the app."
+                        message = "Couldn't reach the Dupe Space. Try re-opening the app.",
                     )
                 }
                 return@launch
             }
-            // Wait for the dupe to land in the profile.
             repeat(40) {
                 delay(500)
                 val duped = withContext(Dispatchers.IO) { Profiles.dupedPackages(context) }
@@ -138,7 +159,7 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
             _state.update {
                 it.copy(
                     inFlight = it.inFlight - packageName,
-                    error = "Duping timed out — this app may not be clonable on your device."
+                    message = "Duping timed out — this app may not be clonable here.",
                 )
             }
         }
@@ -152,7 +173,6 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
                 Profiles.sendToDupeSpace(context, Bridge.CMD_REMOVE, packageName)
             }
             if (sent) {
-                // The user confirms removal in a system dialog; poll for a while.
                 repeat(60) {
                     delay(1000)
                     val duped = withContext(Dispatchers.IO) { Profiles.dupedPackages(context) }
@@ -171,7 +191,7 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
     fun openDupe(packageName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!Profiles.launchDupe(context, packageName)) {
-                _state.update { it.copy(error = "Couldn't open the duped app.") }
+                _state.update { it.copy(message = "Couldn't open the duped app.") }
             }
         }
     }

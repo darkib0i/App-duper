@@ -45,7 +45,7 @@ fun CompanionScreen() {
             ShimmerTitle("Dupe Space", fontSize = 32.sp)
             Spacer(Modifier.height(14.dp))
             Text(
-                "You're inside the Dupe Space 🌌",
+                "You're inside the Dupe Space",
                 color = Starlight,
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center,
