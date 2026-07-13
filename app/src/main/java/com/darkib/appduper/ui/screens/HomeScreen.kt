@@ -87,7 +87,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.darkib.appduper.core.AppEntry
 import com.darkib.appduper.core.AppRepository
-import com.darkib.appduper.ui.DupeMethod
 import com.darkib.appduper.ui.DuperUiState
 import com.darkib.appduper.ui.components.AnimatedBackground
 import com.darkib.appduper.ui.components.ConfettiOverlay
@@ -111,7 +110,6 @@ fun HomeScreen(
     onDupe: (String) -> Unit,
     onOpen: (String) -> Unit,
     onRemove: (String) -> Unit,
-    onCreateSpace: () -> Unit,
     onDismissMessage: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
@@ -126,11 +124,7 @@ fun HomeScreen(
             Spacer(Modifier.height(14.dp))
             Header(appCount = state.apps.size, dupeCount = state.duped.size)
             Spacer(Modifier.height(14.dp))
-            MethodStrip(
-                method = state.method,
-                provisioning = state.provisioning,
-                onCreateSpace = onCreateSpace,
-            )
+            InfoStrip()
             SearchBar(query = state.query, onQueryChange = onQueryChange)
             Spacer(Modifier.height(12.dp))
 
@@ -202,23 +196,9 @@ private fun StatChip(count: Int, label: String) {
     }
 }
 
-/** Explains, per device, how duping works — and offers setup when possible. */
+/** Short explainer of how duping works. */
 @Composable
-private fun MethodStrip(
-    method: DupeMethod,
-    provisioning: Boolean,
-    onCreateSpace: () -> Unit,
-) {
-    val text = when {
-        provisioning -> "Building your Dupe Space… this can take a minute."
-        method == DupeMethod.OWN_SPACE ->
-            "Tap Dupe on any app to instantly clone it with its own account."
-        method == DupeMethod.CAN_SETUP ->
-            "First dupe sets up a private Dupe Space (one-time). Tap Dupe to begin."
-        else ->
-            "Your phone already has a work profile, so App Duper opens your " +
-                "device's built-in cloning. Tap Dupe on any app."
-    }
+private fun InfoStrip() {
     Row(
         Modifier
             .fillMaxWidth()
@@ -229,45 +209,16 @@ private fun MethodStrip(
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (provisioning) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                color = Starlight,
-                strokeWidth = 2.dp,
-            )
-        } else {
-            Icon(Icons.Rounded.Info, contentDescription = null, tint = Dimmed, modifier = Modifier.size(18.dp))
-        }
+        Icon(Icons.Rounded.Info, contentDescription = null, tint = Dimmed, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(11.dp))
-        Text(text, color = Dimmed, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f))
-        if (method == DupeMethod.CAN_SETUP && !provisioning) {
-            Spacer(Modifier.width(10.dp))
-            MiniButton(text = "Set up", onClick = onCreateSpace)
-        }
-    }
-}
-
-@Composable
-private fun MiniButton(text: String, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.9f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "miniPress",
-    )
-    Row(
-        Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(50))
-            .background(Color.White)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(5.dp))
-        Text(text, color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+        Text(
+            "Tap Dupe to install a second copy of an app with its own data and " +
+                "login. Approve the install when your phone asks.",
+            color = Dimmed,
+            fontSize = 12.5.sp,
+            lineHeight = 17.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

@@ -42,6 +42,19 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/*.kotlin_module",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/versions/**",
+                "**/module-info.class",
+            )
+        }
+    }
 }
 
 dependencies {
@@ -58,4 +71,8 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+
+    // APK cloning: rewrite the binary manifest + re-sign the repackaged APK.
+    implementation("io.github.reandroid:ARSCLib:1.4.0")
+    implementation("com.android.tools.build:apksig:8.7.3")
 }

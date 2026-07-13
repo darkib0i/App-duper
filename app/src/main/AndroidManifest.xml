@@ -6,7 +6,8 @@
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
-    <!-- Needed to remove a dupe from inside the Dupe Space -->
+    <!-- Needed to install cloned APKs and remove them again -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <!-- Signature-protected permission so only App Duper itself can talk across profiles -->
@@ -64,6 +65,15 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Receives PackageInstaller session status for clone install/uninstall. -->
+        <receiver
+            android:name=".install.InstallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.darkib.appduper.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".admin.DuperAdmin"

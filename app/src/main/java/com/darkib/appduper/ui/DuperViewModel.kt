@@ -1,11 +1,14 @@
 package com.darkib.appduper.ui
 
 import android.app.Application
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.darkib.appduper.core.AppEntry
 import com.darkib.appduper.core.AppRepository
-import com.darkib.appduper.core.Bridge
+import com.darkib.appduper.core.ApkCloner
+import com.darkib.appduper.core.CloneInstaller
+import com.darkib.appduper.core.Clones
 import com.darkib.appduper.core.Profiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -16,27 +19,18 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Top-level screen. Everything that isn't the companion is the single Home. */
+/** Top-level screen. */
 enum class Stage { CHECKING, INSIDE_SPACE, HOME }
-
-/** How this device can actually make a second copy of an app. */
-enum class DupeMethod {
-    OWN_SPACE,     // App Duper owns a Dupe Space and clones into it directly
-    CAN_SETUP,     // No space yet, but we're allowed to create one
-    SYSTEM_CLONE,  // A work profile already exists -> hand off to the OS cloner
-}
 
 data class DuperUiState(
     val stage: Stage = Stage.CHECKING,
-    val method: DupeMethod = DupeMethod.CAN_SETUP,
     val loadingApps: Boolean = true,
     val apps: List<AppEntry> = emptyList(),
     val duped: Set<String> = emptySet(),
     val inFlight: Set<String> = emptySet(),
     val query: String = "",
-    val provisioning: Boolean = false,
-    val celebration: Long = 0L,   // bump to fire the burst overlay
-    val message: String? = null,  // transient info / error banner
+    val celebration: Long = 0L,
+    val message: String? = null,
 )
 
 class DuperViewModel(app: Application) : AndroidViewModel(app) {
@@ -46,22 +40,16 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
 
     private val context get() = getApplication<Application>()
 
-    /** Re-evaluate everything; called on every onResume. */
     fun refresh() {
         viewModelScope.launch {
-            val (stage, method) = withContext(Dispatchers.IO) {
-                runCatching { detect() }.getOrDefault(Stage.HOME to DupeMethod.SYSTEM_CLONE)
+            val stage = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (Profiles.isInsideDupeSpace(context)) Stage.INSIDE_SPACE else Stage.HOME
+                }.getOrDefault(Stage.HOME)
             }
-            _state.update { it.copy(stage = stage, method = method) }
+            _state.update { it.copy(stage = stage) }
             if (stage == Stage.HOME) loadApps()
         }
-    }
-
-    private fun detect(): Pair<Stage, DupeMethod> = when {
-        Profiles.isInsideDupeSpace(context) -> Stage.INSIDE_SPACE to DupeMethod.OWN_SPACE
-        Profiles.dupeSpace(context) != null -> Stage.HOME to DupeMethod.OWN_SPACE
-        Profiles.canCreateOwnSpace(context) -> Stage.HOME to DupeMethod.CAN_SETUP
-        else -> Stage.HOME to DupeMethod.SYSTEM_CLONE
     }
 
     private fun loadApps() {
@@ -73,7 +61,7 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
                     } else {
                         _state.value.apps
                     }
-                    loaded to runCatching { Profiles.dupedPackages(context) }.getOrDefault(emptySet())
+                    loaded to runCatching { Clones.basePackagesWithClones(context) }.getOrDefault(emptySet())
                 }
                 _state.update { it.copy(loadingApps = false, apps = apps, duped = duped) }
             } catch (t: Throwable) {
@@ -88,76 +76,36 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
-    // ---- Dupe Space provisioning -------------------------------------------
-
-    fun onProvisioningLaunched() {
-        _state.update { it.copy(provisioning = true) }
-        viewModelScope.launch {
-            repeat(120) {
-                val space = withContext(Dispatchers.IO) { Profiles.dupeSpace(context) }
-                if (space != null) {
-                    _state.update {
-                        it.copy(provisioning = false, method = DupeMethod.OWN_SPACE)
-                    }
-                    loadApps()
-                    return@launch
-                }
-                delay(1000)
-            }
-            _state.update { it.copy(provisioning = false) }
-        }
-    }
-
-    fun provisioningCancelled() = _state.update { it.copy(provisioning = false) }
-
-    // ---- Duping ------------------------------------------------------------
-
-    /** Requests that MainActivity launch the system provisioning flow. */
-    val provisionRequests = MutableStateFlow(0)
-
+    /** Clone [packageName] into a second, independent app and install it. */
     fun dupe(packageName: String) {
-        when (_state.value.method) {
-            DupeMethod.OWN_SPACE -> cloneIntoSpace(packageName)
-            DupeMethod.CAN_SETUP -> provisionRequests.update { it + 1 }
-            DupeMethod.SYSTEM_CLONE -> {
-                val message = when (Profiles.openSystemClone(context, packageName)) {
-                    Profiles.CloneLaunch.OEM_CLONER ->
-                        "Opened your phone's app-cloning screen — switch on the second copy there."
-                    Profiles.CloneLaunch.APP_DETAILS ->
-                        "Opened this app's info page. Look for \"App cloning\", \"Dual apps\" " +
-                            "or \"Clone\" — that makes the second copy."
-                    Profiles.CloneLaunch.SETTINGS ->
-                        "Your phone already has a work profile, so App Duper can't clone " +
-                            "directly. In Settings, search \"dual apps\", \"app clone\" or " +
-                            "\"parallel apps\" to make a second copy."
-                    Profiles.CloneLaunch.NONE ->
-                        "Couldn't open a cloning screen on this device."
-                }
-                _state.update { it.copy(message = message) }
-            }
-        }
-    }
-
-    private fun cloneIntoSpace(packageName: String) {
         if (packageName in _state.value.inFlight) return
         _state.update { it.copy(inFlight = it.inFlight + packageName) }
         viewModelScope.launch {
-            val sent = withContext(Dispatchers.IO) {
-                Profiles.sendToDupeSpace(context, Bridge.CMD_CLONE, packageName)
+            val result = withContext(Dispatchers.IO) { ApkCloner.buildClone(context, packageName) }
+            if (!result.success) {
+                _state.update {
+                    it.copy(inFlight = it.inFlight - packageName, message = "Couldn't clone: ${result.error}")
+                }
+                return@launch
             }
-            if (!sent) {
+            val installed = runCatching {
+                withContext(Dispatchers.IO) { CloneInstaller.install(context, result.apks) }
+            }
+            if (installed.isFailure) {
                 _state.update {
                     it.copy(
                         inFlight = it.inFlight - packageName,
-                        message = "Couldn't reach the Dupe Space. Try re-opening the app.",
+                        message = "Install failed: ${installed.exceptionOrNull()?.message}",
                     )
                 }
                 return@launch
             }
-            repeat(40) {
-                delay(500)
-                val duped = withContext(Dispatchers.IO) { Profiles.dupedPackages(context) }
+            // The user confirms in the system installer dialog; wait for the clone to land.
+            repeat(180) {
+                delay(1000)
+                val duped = withContext(Dispatchers.IO) { Clones.basePackagesWithClones(context) }
                 if (packageName in duped) {
+                    result.apks.forEach { runCatching { it.delete() } }
                     _state.update {
                         it.copy(
                             duped = duped,
@@ -168,42 +116,41 @@ class DuperViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
             }
-            _state.update {
-                it.copy(
-                    inFlight = it.inFlight - packageName,
-                    message = "Duping timed out — this app may not be clonable here.",
-                )
-            }
-        }
-    }
-
-    fun removeDupe(packageName: String) {
-        if (packageName in _state.value.inFlight) return
-        _state.update { it.copy(inFlight = it.inFlight + packageName) }
-        viewModelScope.launch {
-            val sent = withContext(Dispatchers.IO) {
-                Profiles.sendToDupeSpace(context, Bridge.CMD_REMOVE, packageName)
-            }
-            if (sent) {
-                repeat(60) {
-                    delay(1000)
-                    val duped = withContext(Dispatchers.IO) { Profiles.dupedPackages(context) }
-                    if (packageName !in duped) {
-                        _state.update {
-                            it.copy(duped = duped, inFlight = it.inFlight - packageName)
-                        }
-                        return@launch
-                    }
-                }
-            }
+            // Timed out or cancelled.
+            result.apks.forEach { runCatching { it.delete() } }
             _state.update { it.copy(inFlight = it.inFlight - packageName) }
         }
     }
 
-    fun openDupe(packageName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (!Profiles.launchDupe(context, packageName)) {
-                _state.update { it.copy(message = "Couldn't open the duped app.") }
+    fun removeDupe(basePackage: String) {
+        if (basePackage in _state.value.inFlight) return
+        val clone = Clones.firstClone(context, basePackage) ?: return
+        _state.update { it.copy(inFlight = it.inFlight + basePackage) }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { CloneInstaller.uninstall(context, clone) } }
+            repeat(120) {
+                delay(1000)
+                val duped = withContext(Dispatchers.IO) { Clones.basePackagesWithClones(context) }
+                if (basePackage !in duped) {
+                    _state.update { it.copy(duped = duped, inFlight = it.inFlight - basePackage) }
+                    return@launch
+                }
+            }
+            _state.update { it.copy(inFlight = it.inFlight - basePackage) }
+        }
+    }
+
+    fun openDupe(basePackage: String) {
+        viewModelScope.launch {
+            val intent = withContext(Dispatchers.IO) {
+                Clones.firstClone(context, basePackage)?.let { Clones.launchIntentFor(context, it) }
+            }
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { context.startActivity(intent) }
+                    .onFailure { _state.update { s -> s.copy(message = "Couldn't open the dupe.") } }
+            } else {
+                _state.update { it.copy(message = "Couldn't open the dupe.") }
             }
         }
     }

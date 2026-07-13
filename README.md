@@ -10,25 +10,38 @@ burst every time a dupe lands.
 
 ## ✨ How it works
 
-App Duper is built on Android's **managed work profile** — the same
-battle-tested isolation the OS uses for work apps (and that open-source
-cloners like Shelter and Island use):
+App Duper repackages the app's own APK under a new package id — the same
+technique the "App Cloner" apps use. No root, no work profile:
 
-1. On first launch you tap **Create Dupe Space** — Android creates an
-   isolated profile owned by App Duper.
-2. Tap **Dupe** on any app — App Duper sends a command across the profile
-   boundary and installs a second copy of that app inside the Dupe Space
-   (no APK downloading, it reuses the app already on your phone).
-3. The dupe shows up in your launcher's work tab with a briefcase badge and
-   runs with **completely separate data** — so it gets its own login.
+1. Tap **Dupe** on any app.
+2. App Duper pulls that app's installed APK, rewrites its package id in the
+   binary `AndroidManifest.xml` (e.g. `com.instagram.android` →
+   `com.instagram.android.dupe`), keeping every component class pointing at
+   the original package so it still resolves, and making provider
+   authorities and declared permissions unique so they don't collide with
+   the original.
+3. It re-signs the repackaged APK with its own bundled key
+   ([`apksig`](https://android.googlesource.com/platform/tools/apksig/)).
+4. It installs the result through `PackageInstaller` — you approve the
+   normal Android install prompt, and a second, fully independent copy of
+   the app appears in your launcher with its own data and its own login.
 
-You can open or remove any dupe straight from App Duper's home screen.
+Manifest rewriting uses [ARSCLib](https://github.com/REAndroid/ARSCLib).
+Open or remove any dupe straight from App Duper's home screen.
 
 ## 📱 Requirements
 
 - Android 9 (API 28) or newer
-- A device that allows creating a work profile (phones managed by a
-  school/employer may block this)
+- Permission to install unknown apps (Android prompts for this the first
+  time you dupe something)
+
+## ⚠️ Limits of this method
+
+- Apps delivered as a split App Bundle are cloned including their config
+  splits, but some heavily-obfuscated or integrity-checked apps (certain
+  banking / DRM apps, apps with server-side signature pinning) may refuse
+  to run when repackaged. Most social/messaging apps clone fine.
+- A clone shares the original's name and icon in the launcher.
 
 ## 🔨 Building
 
@@ -45,16 +58,10 @@ Artifacts).
 
 | Path | What it is |
 |---|---|
-| `core/Profiles.kt` | Finds/creates the Dupe Space, sends cross-profile commands, lists & launches dupes |
-| `core/AppRepository.kt` | Loads every launchable app with its icon |
-| `admin/DuperAdmin.kt` | Profile-owner receiver; finalizes the Dupe Space after provisioning |
-| `admin/ProvisioningActivity.kt` | Android 12+ provisioning hooks |
-| `bridge/ProfileBridgeActivity.kt` | Invisible worker inside the Dupe Space that installs/uninstalls dupes |
+| `core/ApkCloner.kt` | Pulls an app's APK(s) and rewrites the manifest package id via ARSCLib |
+| `core/Signer.kt` | Re-signs the repackaged APK with the bundled key (apksig) |
+| `core/CloneInstaller.kt` | Streams the signed clone into a `PackageInstaller` session |
+| `core/Clones.kt` | Discovers/launches/removes installed clones (`.dupe` suffix) |
+| `core/AppRepository.kt` | Loads every launchable app; decodes icons lazily |
+| `install/InstallReceiver.kt` | Handles install-session status / the user-confirm prompt |
 | `ui/` | Jetpack Compose UI: animated background, confetti, shimmer titles, the works |
-
-## ⚠️ Notes
-
-- A few apps detect work profiles and refuse to run cloned (some banking
-  apps, DRM-heavy apps). Most social/messaging apps dupe fine.
-- Removing the Dupe Space (Settings → Accounts → Remove work profile)
-  deletes all dupes and their data at once.

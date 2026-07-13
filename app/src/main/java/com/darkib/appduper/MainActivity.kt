@@ -1,12 +1,9 @@
 package com.darkib.appduper
 
-import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -85,30 +82,6 @@ private fun Root(viewModel: DuperViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    val provisioningLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.onProvisioningLaunched()
-        } else {
-            viewModel.provisioningCancelled()
-        }
-    }
-
-    fun createSpace() {
-        try {
-            provisioningLauncher.launch(Profiles.provisioningIntent(context))
-        } catch (e: Exception) {
-            viewModel.provisioningCancelled()
-        }
-    }
-
-    // Duping an app when no space exists yet triggers provisioning.
-    val requests by viewModel.provisionRequests.collectAsStateWithLifecycle()
-    LaunchedEffect(requests) {
-        if (requests > 0) createSpace()
-    }
-
     var crashReport by remember { mutableStateOf(AppDuperApp.consumeLastCrash(context)) }
 
     Box(Modifier.fillMaxSize().background(SpaceBlack)) {
@@ -135,7 +108,6 @@ private fun Root(viewModel: DuperViewModel) {
                     onDupe = viewModel::dupe,
                     onOpen = viewModel::openDupe,
                     onRemove = viewModel::removeDupe,
-                    onCreateSpace = ::createSpace,
                     onDismissMessage = viewModel::dismissMessage,
                 )
             }
