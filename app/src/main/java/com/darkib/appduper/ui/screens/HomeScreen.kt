@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -454,7 +455,7 @@ private fun AppCard(
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(top = offsetY)
+            .offset(y = offsetY)
             .alpha(alpha)
             .clip(RoundedCornerShape(22.dp))
             .then(if (isDuped) Modifier.rotatingBorder() else Modifier.staticBorder())
